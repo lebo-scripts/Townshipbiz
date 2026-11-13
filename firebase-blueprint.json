@@ -1,0 +1,303 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Authenticated user account, POPIA consent, plan tier, and notification preferences.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "email": { "type": "string", "minLength": 3, "maxLength": 200 },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "phone": { "type": "string", "maxLength": 40 },
+        "planTier": { "type": "string", "enum": ["free", "starter", "growth"] },
+        "popiaConsent": { "type": "boolean" },
+        "popiaConsentAt": { "type": "string", "maxLength": 64 },
+        "retentionMonths": { "type": "number" },
+        "createdAt": { "type": "string", "maxLength": 64 },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["uid", "email", "displayName", "planTier", "popiaConsent"]
+    },
+    "BusinessProfile": {
+      "title": "BusinessProfile",
+      "description": "South African SME or informal business profile with registration and operational details.",
+      "type": "object",
+      "properties": {
+        "ownerUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "name": { "type": "string", "minLength": 2, "maxLength": 140 },
+        "industry": { "type": "string", "minLength": 2, "maxLength": 80 },
+        "structure": { "type": "string", "enum": ["informal", "sole_proprietor", "pty_ltd", "cooperative", "npo"] },
+        "registrationNumber": { "type": "string", "maxLength": 60 },
+        "vatRegistered": { "type": "boolean" },
+        "vatNumber": { "type": "string", "maxLength": 40 },
+        "location": { "type": "string", "minLength": 2, "maxLength": 160 },
+        "municipality": { "type": "string", "maxLength": 100 },
+        "province": { "type": "string", "minLength": 2, "maxLength": 60 },
+        "employeeCount": { "type": "number" },
+        "annualTurnoverRange": { "type": "string", "maxLength": 80 },
+        "operatingHours": { "type": "string", "maxLength": 120 },
+        "phone": { "type": "string", "maxLength": 40 },
+        "email": { "type": "string", "maxLength": 200 },
+        "marketplaceListed": { "type": "boolean" },
+        "createdAt": { "type": "string", "maxLength": 64 },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["ownerUid", "name", "industry", "structure", "location", "province", "employeeCount", "annualTurnoverRange"]
+    },
+    "FinancialTransaction": {
+      "title": "FinancialTransaction",
+      "description": "Income, expense, receivable, or payable transaction in ZAR.",
+      "type": "object",
+      "properties": {
+        "ownerUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "businessId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "type": { "type": "string", "enum": ["income", "expense", "receivable", "payable"] },
+        "status": { "type": "string", "enum": ["paid", "pending", "overdue"] },
+        "amount": { "type": "number" },
+        "vatAmount": { "type": "number" },
+        "currency": { "type": "string", "enum": ["ZAR"] },
+        "category": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "description": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "merchantOrParty": { "type": "string", "maxLength": 140 },
+        "paymentMethod": { "type": "string", "maxLength": 60 },
+        "date": { "type": "string", "minLength": 8, "maxLength": 32 },
+        "dueDate": { "type": "string", "maxLength": 32 },
+        "receiptDocumentId": { "type": "string", "maxLength": 128 },
+        "receiptHash": { "type": "string", "maxLength": 128 },
+        "ocrVerified": { "type": "boolean" },
+        "createdAt": { "type": "string", "maxLength": 64 },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["ownerUid", "businessId", "type", "status", "amount", "currency", "category", "description", "date"]
+    },
+    "VaultDocument": {
+      "title": "VaultDocument",
+      "description": "Metadata and AI interpretation for a private business document stored in the vault.",
+      "type": "object",
+      "properties": {
+        "ownerUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "businessId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "name": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "category": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "mimeType": { "type": "string", "minLength": 3, "maxLength": 100 },
+        "sizeBytes": { "type": "number" },
+        "storageKey": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "sha256": { "type": "string", "maxLength": 128 },
+        "extractedText": { "type": "string", "maxLength": 20000 },
+        "aiSummary": { "type": "string", "maxLength": 5000 },
+        "issueDate": { "type": "string", "maxLength": 32 },
+        "expiryDate": { "type": "string", "maxLength": 32 },
+        "linkedTransactionId": { "type": "string", "maxLength": 128 },
+        "linkedComplianceId": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["ownerUid", "businessId", "name", "category", "mimeType", "sizeBytes", "storageKey"]
+    },
+    "ContactRecord": {
+      "title": "ContactRecord",
+      "description": "Customer or supplier directory record.",
+      "type": "object",
+      "properties": {
+        "ownerUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "businessId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "type": { "type": "string", "enum": ["customer", "supplier"] },
+        "name": { "type": "string", "minLength": 1, "maxLength": 140 },
+        "phone": { "type": "string", "maxLength": 40 },
+        "email": { "type": "string", "maxLength": 200 },
+        "address": { "type": "string", "maxLength": 240 },
+        "createdAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["ownerUid", "businessId", "type", "name"]
+    },
+    "InvoiceRecord": {
+      "title": "InvoiceRecord",
+      "description": "Customer invoice or quotation generated by the business.",
+      "type": "object",
+      "properties": {
+        "ownerUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "businessId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "docType": { "type": "string", "enum": ["invoice", "quotation"] },
+        "number": { "type": "string", "minLength": 1, "maxLength": 60 },
+        "customerName": { "type": "string", "minLength": 1, "maxLength": 140 },
+        "issueDate": { "type": "string", "minLength": 8, "maxLength": 32 },
+        "dueDate": { "type": "string", "maxLength": 32 },
+        "subtotal": { "type": "number" },
+        "vatAmount": { "type": "number" },
+        "total": { "type": "number" },
+        "status": { "type": "string", "enum": ["draft", "sent", "paid", "overdue"] },
+        "linkedTransactionId": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["ownerUid", "businessId", "docType", "number", "customerName", "issueDate", "total", "status"]
+    },
+    "InventoryItem": {
+      "title": "InventoryItem",
+      "description": "Stock item tracked by the business.",
+      "type": "object",
+      "properties": {
+        "ownerUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "businessId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "sku": { "type": "string", "maxLength": 60 },
+        "name": { "type": "string", "minLength": 1, "maxLength": 140 },
+        "unit": { "type": "string", "maxLength": 40 },
+        "quantity": { "type": "number" },
+        "reorderLevel": { "type": "number" },
+        "costPrice": { "type": "number" },
+        "sellingPrice": { "type": "number" },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["ownerUid", "businessId", "name", "quantity", "sellingPrice"]
+    },
+    "ComplianceProgress": {
+      "title": "ComplianceProgress",
+      "description": "Saved status for a South African compliance rule.",
+      "type": "object",
+      "properties": {
+        "ownerUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "businessId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "ruleId": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "status": { "type": "string", "enum": ["pending", "in_progress", "completed", "not_applicable"] },
+        "notes": { "type": "string", "maxLength": 1000 },
+        "linkedDocumentId": { "type": "string", "maxLength": 128 },
+        "renewalDate": { "type": "string", "maxLength": 32 },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["ownerUid", "businessId", "ruleId", "status"]
+    },
+    "NotificationItem": {
+      "title": "NotificationItem",
+      "description": "Business alert for compliance deadlines, expiring documents, or financial events.",
+      "type": "object",
+      "properties": {
+        "ownerUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "businessId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "type": { "type": "string", "maxLength": 60 },
+        "title": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "message": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "severity": { "type": "string", "enum": ["info", "warning", "critical"] },
+        "read": { "type": "boolean" },
+        "createdAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["ownerUid", "businessId", "type", "title", "message", "severity", "read"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "Immutable security and data audit trail entry.",
+      "type": "object",
+      "properties": {
+        "ownerUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "businessId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "actorUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "action": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "resourceType": { "type": "string", "minLength": 1, "maxLength": 60 },
+        "summary": { "type": "string", "minLength": 1, "maxLength": 400 },
+        "createdAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["ownerUid", "businessId", "actorUid", "action", "resourceType", "summary"]
+    },
+    "MarketplaceListing": {
+      "title": "MarketplaceListing",
+      "description": "Public South African local business listing.",
+      "type": "object",
+      "properties": {
+        "businessId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "ownerUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "businessName": { "type": "string", "minLength": 2, "maxLength": 140 },
+        "category": { "type": "string", "minLength": 2, "maxLength": 80 },
+        "location": { "type": "string", "minLength": 2, "maxLength": 160 },
+        "province": { "type": "string", "minLength": 2, "maxLength": 60 },
+        "description": { "type": "string", "minLength": 5, "maxLength": 1000 },
+        "contactPhone": { "type": "string", "maxLength": 40 },
+        "contactEmail": { "type": "string", "maxLength": 200 },
+        "imageUrl": { "type": "string", "maxLength": 400 },
+        "active": { "type": "boolean" },
+        "ratingAvg": { "type": "number" },
+        "reviewCount": { "type": "number" },
+        "createdAt": { "type": "string", "maxLength": 64 },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["businessId", "ownerUid", "businessName", "category", "location", "province", "description", "active"]
+    },
+    "MarketplaceReview": {
+      "title": "MarketplaceReview",
+      "description": "Customer review on a marketplace listing.",
+      "type": "object",
+      "properties": {
+        "authorUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "authorName": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "rating": { "type": "number" },
+        "comment": { "type": "string", "minLength": 2, "maxLength": 600 },
+        "createdAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["authorUid", "authorName", "rating", "comment"]
+    },
+    "MarketplaceEnquiry": {
+      "title": "MarketplaceEnquiry",
+      "description": "Direct customer enquiry sent to a listed business.",
+      "type": "object",
+      "properties": {
+        "senderUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "businessOwnerUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "senderName": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "senderContact": { "type": "string", "minLength": 3, "maxLength": 120 },
+        "message": { "type": "string", "minLength": 3, "maxLength": 1000 },
+        "createdAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["senderUid", "businessOwnerUid", "senderName", "senderContact", "message"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Private user account profile isolated to the authenticated user."
+    },
+    "/businesses/{businessId}": {
+      "schema": { "$ref": "#/entities/BusinessProfile" },
+      "description": "Business profile owned by a user."
+    },
+    "/businesses/{businessId}/transactions/{txId}": {
+      "schema": { "$ref": "#/entities/FinancialTransaction" },
+      "description": "Financial transactions isolated to the owning business."
+    },
+    "/businesses/{businessId}/documents/{docId}": {
+      "schema": { "$ref": "#/entities/VaultDocument" },
+      "description": "Document vault metadata isolated to the owning business."
+    },
+    "/businesses/{businessId}/contacts/{contactId}": {
+      "schema": { "$ref": "#/entities/ContactRecord" },
+      "description": "Suppliers and customers belonging to the business."
+    },
+    "/businesses/{businessId}/invoices/{invoiceId}": {
+      "schema": { "$ref": "#/entities/InvoiceRecord" },
+      "description": "Invoices and quotations generated by the business."
+    },
+    "/businesses/{businessId}/inventory/{itemId}": {
+      "schema": { "$ref": "#/entities/InventoryItem" },
+      "description": "Inventory stock records belonging to the business."
+    },
+    "/businesses/{businessId}/complianceItems/{ruleId}": {
+      "schema": { "$ref": "#/entities/ComplianceProgress" },
+      "description": "Compliance checklist progress for the business."
+    },
+    "/businesses/{businessId}/notifications/{notifId}": {
+      "schema": { "$ref": "#/entities/NotificationItem" },
+      "description": "Business notifications and deadline reminders."
+    },
+    "/businesses/{businessId}/auditLogs/{logId}": {
+      "schema": { "$ref": "#/entities/AuditLog" },
+      "description": "Audit log entries for the business."
+    },
+    "/marketplace/{listingId}": {
+      "schema": { "$ref": "#/entities/MarketplaceListing" },
+      "description": "Publicly browsable South African business marketplace listings."
+    },
+    "/marketplace/{listingId}/reviews/{reviewId}": {
+      "schema": { "$ref": "#/entities/MarketplaceReview" },
+      "description": "Customer reviews for a marketplace listing."
+    },
+    "/marketplace/{listingId}/enquiries/{enquiryId}": {
+      "schema": { "$ref": "#/entities/MarketplaceEnquiry" },
+      "description": "Private customer enquiries visible only to sender and business owner."
+    }
+  }
+}

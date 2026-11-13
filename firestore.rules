@@ -1,0 +1,260 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Pillar 1 / Global Safety Net: Default deny all access
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Boot connectivity check document
+    match /test/{docId} {
+      allow get: if isSignedIn() && docId == 'connection';
+    }
+
+    // --- Hardened Global Primitives ---
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwnerUid(uid) {
+      return isVerifiedUser() && request.auth.uid == uid;
+    }
+
+    function ownsBusiness(businessId) {
+      return isVerifiedUser() &&
+        exists(/databases/$(database)/documents/businesses/$(businessId)) &&
+        get(/databases/$(database)/documents/businesses/$(businessId)).data.ownerUid == request.auth.uid;
+    }
+
+    // --- Validation Blueprints ---
+    function isValidUser(data) {
+      return data.keys().hasAll(['uid', 'email', 'displayName', 'planTier', 'popiaConsent']) &&
+        data.uid is string && data.uid == request.auth.uid && data.uid.size() <= 128 &&
+        data.email is string && data.email.size() >= 3 && data.email.size() <= 200 &&
+        data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 120 &&
+        data.planTier in ['free', 'starter', 'growth'] &&
+        data.popiaConsent is bool;
+    }
+
+    function isValidBusiness(data) {
+      return data.keys().hasAll(['ownerUid', 'name', 'industry', 'structure', 'location', 'province', 'employeeCount', 'annualTurnoverRange']) &&
+        data.ownerUid is string && data.ownerUid == request.auth.uid && data.ownerUid.size() <= 128 &&
+        data.name is string && data.name.size() >= 2 && data.name.size() <= 140 &&
+        data.industry is string && data.industry.size() >= 2 && data.industry.size() <= 80 &&
+        data.structure in ['informal', 'sole_proprietor', 'pty_ltd', 'cooperative', 'npo'] &&
+        data.location is string && data.location.size() >= 2 && data.location.size() <= 160 &&
+        data.province is string && data.province.size() >= 2 && data.province.size() <= 60 &&
+        data.employeeCount is number && data.employeeCount >= 0 && data.employeeCount <= 100000 &&
+        data.annualTurnoverRange is string && data.annualTurnoverRange.size() >= 1 && data.annualTurnoverRange.size() <= 80;
+    }
+
+    function isValidSubResource(data, businessId) {
+      return data.keys().hasAll(['ownerUid', 'businessId']) &&
+        data.ownerUid is string && data.ownerUid == request.auth.uid && data.ownerUid.size() <= 128 &&
+        data.businessId is string && data.businessId == businessId && data.businessId.size() <= 128;
+    }
+
+    function isValidTransaction(data, businessId) {
+      return isValidSubResource(data, businessId) &&
+        data.keys().hasAll(['type', 'status', 'amount', 'currency', 'category', 'description', 'date']) &&
+        data.type in ['income', 'expense', 'receivable', 'payable'] &&
+        data.status in ['paid', 'pending', 'overdue'] &&
+        data.amount is number && data.amount >= 0 && data.amount <= 1000000000 &&
+        data.currency == 'ZAR' &&
+        data.category is string && data.category.size() >= 1 && data.category.size() <= 80 &&
+        data.description is string && data.description.size() >= 1 && data.description.size() <= 300 &&
+        data.date is string && data.date.size() >= 8 && data.date.size() <= 32;
+    }
+
+    function isValidDocument(data, businessId) {
+      return isValidSubResource(data, businessId) &&
+        data.keys().hasAll(['name', 'category', 'mimeType', 'sizeBytes', 'storageKey']) &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 200 &&
+        data.category is string && data.category.size() >= 1 && data.category.size() <= 80 &&
+        data.mimeType is string && data.mimeType.size() >= 3 && data.mimeType.size() <= 100 &&
+        data.sizeBytes is number && data.sizeBytes > 0 && data.sizeBytes <= 20971520 &&
+        data.storageKey is string && data.storageKey.size() >= 1 && data.storageKey.size() <= 256;
+    }
+
+    function isValidMarketplaceListing(data) {
+      return data.keys().hasAll(['businessId', 'ownerUid', 'businessName', 'category', 'location', 'province', 'description', 'active']) &&
+        data.ownerUid is string && data.ownerUid == request.auth.uid && data.ownerUid.size() <= 128 &&
+        data.businessId is string && data.businessId.size() >= 1 && data.businessId.size() <= 128 &&
+        data.businessName is string && data.businessName.size() >= 2 && data.businessName.size() <= 140 &&
+        data.category is string && data.category.size() >= 2 && data.category.size() <= 80 &&
+        data.location is string && data.location.size() >= 2 && data.location.size() <= 160 &&
+        data.province is string && data.province.size() >= 2 && data.province.size() <= 60 &&
+        data.description is string && data.description.size() >= 5 && data.description.size() <= 1000 &&
+        data.active is bool;
+    }
+
+    // --- Users (PII Strictly Private) ---
+    match /users/{userId} {
+      allow get: if isValidId(userId) && isOwnerUid(userId);
+      allow list: if false;
+      allow create: if isValidId(userId) && isOwnerUid(userId) && isValidUser(incoming());
+      allow update: if isValidId(userId) && isOwnerUid(userId) && isValidUser(incoming()) &&
+        incoming().uid == existing().uid;
+      allow delete: if isValidId(userId) && isOwnerUid(userId);
+    }
+
+    // --- Businesses & Isolated Subcollections ---
+    match /businesses/{businessId} {
+      allow get: if isValidId(businessId) && isVerifiedUser() && existing().ownerUid == request.auth.uid;
+      allow list: if isVerifiedUser() && existing().ownerUid == request.auth.uid;
+      allow create: if isValidId(businessId) && isVerifiedUser() && isValidBusiness(incoming());
+      allow update: if isValidId(businessId) && isVerifiedUser() && existing().ownerUid == request.auth.uid &&
+        isValidBusiness(incoming()) && incoming().ownerUid == existing().ownerUid;
+      allow delete: if isValidId(businessId) && isVerifiedUser() && existing().ownerUid == request.auth.uid;
+
+      match /transactions/{txId} {
+        allow get: if isValidId(businessId) && isValidId(txId) && isVerifiedUser() && existing().ownerUid == request.auth.uid;
+        allow list: if isValidId(businessId) && isVerifiedUser() && existing().ownerUid == request.auth.uid;
+        allow create: if isValidId(businessId) && isValidId(txId) && ownsBusiness(businessId) && isValidTransaction(incoming(), businessId);
+        allow update: if isValidId(businessId) && isValidId(txId) && ownsBusiness(businessId) && isValidTransaction(incoming(), businessId) &&
+          incoming().ownerUid == existing().ownerUid && incoming().businessId == existing().businessId;
+        allow delete: if isValidId(businessId) && isValidId(txId) && ownsBusiness(businessId);
+      }
+
+      match /documents/{docId} {
+        allow get: if isValidId(businessId) && isValidId(docId) && isVerifiedUser() && existing().ownerUid == request.auth.uid;
+        allow list: if isValidId(businessId) && isVerifiedUser() && existing().ownerUid == request.auth.uid;
+        allow create: if isValidId(businessId) && isValidId(docId) && ownsBusiness(businessId) && isValidDocument(incoming(), businessId);
+        allow update: if isValidId(businessId) && isValidId(docId) && ownsBusiness(businessId) && isValidDocument(incoming(), businessId) &&
+          incoming().ownerUid == existing().ownerUid && incoming().businessId == existing().businessId;
+        allow delete: if isValidId(businessId) && isValidId(docId) && ownsBusiness(businessId);
+      }
+
+      match /categories/{catId} {
+        allow get: if isValidId(businessId) && isValidId(catId) && isVerifiedUser() && existing().ownerUid == request.auth.uid;
+        allow list: if isValidId(businessId) && isVerifiedUser() && existing().ownerUid == request.auth.uid;
+        allow create: if isValidId(businessId) && isValidId(catId) && ownsBusiness(businessId) && isValidSubResource(incoming(), businessId) &&
+          incoming().name is string && incoming().name.size() >= 1 && incoming().name.size() <= 80;
+        allow update: if isValidId(businessId) && isValidId(catId) && ownsBusiness(businessId) && isValidSubResource(incoming(), businessId) &&
+          incoming().ownerUid == existing().ownerUid;
+        allow delete: if isValidId(businessId) && isValidId(catId) && ownsBusiness(businessId);
+      }
+
+      match /contacts/{contactId} {
+        allow get: if isValidId(businessId) && isValidId(contactId) && isVerifiedUser() && existing().ownerUid == request.auth.uid;
+        allow list: if isValidId(businessId) && isVerifiedUser() && existing().ownerUid == request.auth.uid;
+        allow create: if isValidId(businessId) && isValidId(contactId) && ownsBusiness(businessId) && isValidSubResource(incoming(), businessId) &&
+          incoming().name is string && incoming().name.size() >= 1 && incoming().name.size() <= 140 &&
+          incoming().type in ['customer', 'supplier'];
+        allow update: if isValidId(businessId) && isValidId(contactId) && ownsBusiness(businessId) && isValidSubResource(incoming(), businessId) &&
+          incoming().ownerUid == existing().ownerUid;
+        allow delete: if isValidId(businessId) && isValidId(contactId) && ownsBusiness(businessId);
+      }
+
+      match /invoices/{invoiceId} {
+        allow get: if isValidId(businessId) && isValidId(invoiceId) && isVerifiedUser() && existing().ownerUid == request.auth.uid;
+        allow list: if isValidId(businessId) && isVerifiedUser() && existing().ownerUid == request.auth.uid;
+        allow create: if isValidId(businessId) && isValidId(invoiceId) && ownsBusiness(businessId) && isValidSubResource(incoming(), businessId) &&
+          incoming().docType in ['invoice', 'quotation'] && incoming().total is number && incoming().total >= 0;
+        allow update: if isValidId(businessId) && isValidId(invoiceId) && ownsBusiness(businessId) && isValidSubResource(incoming(), businessId) &&
+          incoming().ownerUid == existing().ownerUid;
+        allow delete: if isValidId(businessId) && isValidId(invoiceId) && ownsBusiness(businessId);
+      }
+
+      match /inventory/{itemId} {
+        allow get: if isValidId(businessId) && isValidId(itemId) && isVerifiedUser() && existing().ownerUid == request.auth.uid;
+        allow list: if isValidId(businessId) && isVerifiedUser() && existing().ownerUid == request.auth.uid;
+        allow create: if isValidId(businessId) && isValidId(itemId) && ownsBusiness(businessId) && isValidSubResource(incoming(), businessId) &&
+          incoming().name is string && incoming().name.size() >= 1 && incoming().name.size() <= 140 &&
+          incoming().quantity is number && incoming().quantity >= 0;
+        allow update: if isValidId(businessId) && isValidId(itemId) && ownsBusiness(businessId) && isValidSubResource(incoming(), businessId) &&
+          incoming().ownerUid == existing().ownerUid;
+        allow delete: if isValidId(businessId) && isValidId(itemId) && ownsBusiness(businessId);
+      }
+
+      match /complianceItems/{ruleId} {
+        allow get: if isValidId(businessId) && isValidId(ruleId) && isVerifiedUser() && existing().ownerUid == request.auth.uid;
+        allow list: if isValidId(businessId) && isVerifiedUser() && existing().ownerUid == request.auth.uid;
+        allow create: if isValidId(businessId) && isValidId(ruleId) && ownsBusiness(businessId) && isValidSubResource(incoming(), businessId) &&
+          incoming().status in ['pending', 'in_progress', 'completed', 'not_applicable'];
+        allow update: if isValidId(businessId) && isValidId(ruleId) && ownsBusiness(businessId) && isValidSubResource(incoming(), businessId) &&
+          incoming().ownerUid == existing().ownerUid;
+        allow delete: if isValidId(businessId) && isValidId(ruleId) && ownsBusiness(businessId);
+      }
+
+      match /notifications/{notifId} {
+        allow get: if isValidId(businessId) && isValidId(notifId) && isVerifiedUser() && existing().ownerUid == request.auth.uid;
+        allow list: if isValidId(businessId) && isVerifiedUser() && existing().ownerUid == request.auth.uid;
+        allow create: if isValidId(businessId) && isValidId(notifId) && ownsBusiness(businessId) && isValidSubResource(incoming(), businessId);
+        allow update: if isValidId(businessId) && isValidId(notifId) && ownsBusiness(businessId) && isValidSubResource(incoming(), businessId) &&
+          incoming().ownerUid == existing().ownerUid;
+        allow delete: if isValidId(businessId) && isValidId(notifId) && ownsBusiness(businessId);
+      }
+
+      match /auditLogs/{logId} {
+        allow get: if isValidId(businessId) && isValidId(logId) && isVerifiedUser() && existing().ownerUid == request.auth.uid;
+        allow list: if isValidId(businessId) && isVerifiedUser() && existing().ownerUid == request.auth.uid;
+        allow create: if isValidId(businessId) && isValidId(logId) && ownsBusiness(businessId) && isValidSubResource(incoming(), businessId) &&
+          incoming().actorUid == request.auth.uid;
+        allow update: if false;
+        allow delete: if false;
+      }
+    }
+
+    // --- Local Business Marketplace ---
+    match /marketplace/{listingId} {
+      allow get: if isValidId(listingId) && (existing().active == true || (isVerifiedUser() && existing().ownerUid == request.auth.uid));
+      allow list: if existing().active == true || (isVerifiedUser() && existing().ownerUid == request.auth.uid);
+      allow create: if isValidId(listingId) && isVerifiedUser() && isValidMarketplaceListing(incoming()) &&
+        ownsBusiness(incoming().businessId);
+      allow update: if isValidId(listingId) && isVerifiedUser() && existing().ownerUid == request.auth.uid &&
+        isValidMarketplaceListing(incoming()) && incoming().ownerUid == existing().ownerUid;
+      allow delete: if isValidId(listingId) && isVerifiedUser() && existing().ownerUid == request.auth.uid;
+
+      match /reviews/{reviewId} {
+        allow get, list: if true;
+        allow create: if isValidId(listingId) && isValidId(reviewId) && isVerifiedUser() &&
+          incoming().keys().hasAll(['authorUid', 'authorName', 'rating', 'comment']) &&
+          incoming().authorUid == request.auth.uid &&
+          incoming().authorName is string && incoming().authorName.size() >= 1 && incoming().authorName.size() <= 100 &&
+          incoming().rating is number && incoming().rating >= 1 && incoming().rating <= 5 &&
+          incoming().comment is string && incoming().comment.size() >= 2 && incoming().comment.size() <= 600;
+        allow update, delete: if isValidId(listingId) && isValidId(reviewId) && isVerifiedUser() && existing().authorUid == request.auth.uid;
+      }
+
+      match /enquiries/{enquiryId} {
+        allow get: if isValidId(listingId) && isValidId(enquiryId) && isVerifiedUser() &&
+          (existing().senderUid == request.auth.uid || existing().businessOwnerUid == request.auth.uid);
+        allow list: if isValidId(listingId) && isVerifiedUser() &&
+          (existing().senderUid == request.auth.uid || existing().businessOwnerUid == request.auth.uid);
+        allow create: if isValidId(listingId) && isValidId(enquiryId) && isVerifiedUser() &&
+          incoming().keys().hasAll(['senderUid', 'businessOwnerUid', 'senderName', 'senderContact', 'message']) &&
+          incoming().senderUid == request.auth.uid &&
+          incoming().senderName is string && incoming().senderName.size() >= 1 && incoming().senderName.size() <= 100 &&
+          incoming().senderContact is string && incoming().senderContact.size() >= 3 && incoming().senderContact.size() <= 120 &&
+          incoming().message is string && incoming().message.size() >= 3 && incoming().message.size() <= 1000;
+        allow update, delete: if false;
+      }
+
+      match /reports/{reportId} {
+        allow read: if false;
+        allow create: if isValidId(listingId) && isValidId(reportId) && isVerifiedUser() &&
+          incoming().keys().hasAll(['reporterUid', 'reason']) &&
+          incoming().reporterUid == request.auth.uid &&
+          incoming().reason is string && incoming().reason.size() >= 3 && incoming().reason.size() <= 500;
+        allow update, delete: if false;
+      }
+    }
+  }
+}

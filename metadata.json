@@ -1,0 +1,6 @@
+{
+  "name": "TownshipBiz",
+  "description": "AI-powered business management, financial tracking, receipt OCR, document vault, South African compliance checker, and local marketplace platform.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
