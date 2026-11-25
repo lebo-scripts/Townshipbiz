@@ -1,12 +1,20 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   createUserWithEmailAndPassword,
+  getRedirectResult,
+  getIdToken,
+  reload,
+  sendEmailVerification,
   sendPasswordResetEmail,
   signInWithEmailAndPassword,
   signInWithPopup,
+  signInWithRedirect,
+  signOut,
   updateProfile,
+  type User,
 } from 'firebase/auth';
 import { ArrowRight, CheckCircle2, FileText, ShieldCheck, Store } from 'lucide-react';
+import { canRetryGoogleSignInWithRedirect, isEmailVerifiedUser } from '../lib/auth';
 import { auth, googleAuthProvider } from '../lib/firebase';
 
 const PREVIEW_BUSINESSES = [
@@ -36,7 +44,19 @@ const PREVIEW_BUSINESSES = [
   },
 ];
 
-export function AuthScreen() {
+let googleRedirectResult: ReturnType<typeof getRedirectResult> | undefined;
+
+function getGoogleRedirectResult() {
+  googleRedirectResult ??= getRedirectResult(auth);
+  return googleRedirectResult;
+}
+
+interface AuthScreenProps {
+  authError?: string | null;
+  onEmailVerified: (user: User) => Promise<void>;
+}
+
+export function AuthScreen({ authError, onEmailVerified }: AuthScreenProps) {
   const [authMode, setAuthMode] = useState<'google' | 'login' | 'register' | 'reset'>('google');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -45,21 +65,129 @@ export function AuthScreen() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [infoMessage, setInfoMessage] = useState<string | null>(null);
+  const [canUseGoogleRedirect, setCanUseGoogleRedirect] = useState(false);
+  const googleSignInInProgress = useRef(false);
+  const pendingVerificationUser = isEmailVerifiedUser(auth.currentUser) ? null : auth.currentUser;
+
+  useEffect(() => {
+    let active = true;
+    getGoogleRedirectResult().catch((err: unknown) => {
+      if (!active) return;
+      const message = err instanceof Error ? err.message : 'Google redirect sign-in failed.';
+      const code =
+        err instanceof Error && 'code' in err && typeof err.code === 'string' ? err.code : undefined;
+      setError(
+        code === 'auth/unauthorized-domain'
+          ? `Google sign-in is not enabled for this app domain. Add the current hostname to Firebase Authentication > Settings > Authorized domains. (${message})`
+          : `Google redirect sign-in failed${code ? ` (${code})` : ''}: ${message}`
+      );
+      setCanUseGoogleRedirect(canRetryGoogleSignInWithRedirect(code));
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const handleResendVerification = async () => {
+    const user = auth.currentUser;
+    if (!user || isEmailVerifiedUser(user)) return;
+    setError(null);
+    setInfoMessage(null);
+    setLoading(true);
+    try {
+      await sendEmailVerification(user);
+      setInfoMessage(`A verification link has been sent to ${user.email || 'your email address'}.`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Could not send the verification email.';
+      setError(`Could not send the verification email. ${msg}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRefreshVerification = async () => {
+    const user = auth.currentUser;
+    if (!user) return;
+    setError(null);
+    setInfoMessage(null);
+    setLoading(true);
+    try {
+      await reload(user);
+      await getIdToken(user, true);
+      if (!isEmailVerifiedUser(user)) {
+        setInfoMessage('Your email is not verified yet. Open the link in your inbox, then check again.');
+        return;
+      }
+      await onEmailVerified(user);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Could not refresh your verification status.';
+      setError(`Could not refresh your verification status. ${msg}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSignOut = async () => {
+    setError(null);
+    try {
+      await signOut(auth);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Could not sign out.';
+      setError(msg);
+    }
+  };
 
   const handleGoogleSignIn = async () => {
+    if (googleSignInInProgress.current) return;
     if (!popiaAccepted) {
       setError('Please acknowledge the POPIA privacy and data minimisation notice to continue.');
       return;
     }
+    googleSignInInProgress.current = true;
     setError(null);
     setInfoMessage(null);
     setLoading(true);
     try {
       await signInWithPopup(auth, googleAuthProvider);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Google sign-in failed.';
-      setError(msg);
+      const code =
+        err instanceof Error && 'code' in err && typeof err.code === 'string' ? err.code : undefined;
+      if (canRetryGoogleSignInWithRedirect(code)) {
+        setError(
+          code === 'auth/popup-closed-by-user'
+            ? 'The Google popup closed before TownshipBiz received a sign-in result.'
+            : 'Google popup sign-in could not complete in this browser.'
+        );
+        setCanUseGoogleRedirect(true);
+      } else {
+        const msg = err instanceof Error ? err.message : 'Google sign-in failed.';
+        setError(
+          code === 'auth/unauthorized-domain'
+            ? `Google sign-in is not enabled for this app domain. Add the current hostname to Firebase Authentication > Settings > Authorized domains. (${msg})`
+            : `Google sign-in failed${code ? ` (${code})` : ''}: ${msg}`
+        );
+      }
     } finally {
+      googleSignInInProgress.current = false;
+      setLoading(false);
+    }
+  };
+
+  const handleGoogleRedirect = async () => {
+    if (googleSignInInProgress.current) return;
+    googleSignInInProgress.current = true;
+    setError(null);
+    setInfoMessage(null);
+    setLoading(true);
+    try {
+      await signInWithRedirect(auth, googleAuthProvider);
+    } catch (err) {
+      const code =
+        err instanceof Error && 'code' in err && typeof err.code === 'string' ? err.code : undefined;
+      const msg = err instanceof Error ? err.message : 'Google redirect sign-in failed.';
+      setError(`Google redirect sign-in failed${code ? ` (${code})` : ''}: ${msg}`);
+    } finally {
+      googleSignInInProgress.current = false;
       setLoading(false);
     }
   };
@@ -84,6 +212,13 @@ export function AuthScreen() {
         const cred = await createUserWithEmailAndPassword(auth, email.trim(), password);
         if (displayName.trim()) {
           await updateProfile(cred.user, { displayName: displayName.trim() });
+        }
+        try {
+          await sendEmailVerification(cred.user);
+          setInfoMessage(`A verification link has been sent to ${cred.user.email || email.trim()}.`);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : 'Email delivery failed.';
+          setError(`Your account was created, but the verification email could not be sent. ${msg}`);
         }
       } else if (authMode === 'reset') {
         await sendPasswordResetEmail(auth, email.trim());
@@ -185,134 +320,208 @@ export function AuthScreen() {
                   Business data is strictly isolated per owner account and protected under POPIA principles.
                 </p>
 
-                <div className="mt-5 grid grid-cols-3 gap-1 rounded-lg bg-slate-100 p-1">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setAuthMode('google');
-                      setError(null);
-                    }}
-                    className={`min-h-[40px] rounded-md px-2 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer ${
-                      authMode === 'google' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'
-                    }`}
-                  >
-                    Google
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setAuthMode('login');
-                      setError(null);
-                    }}
-                    className={`min-h-[40px] rounded-md px-2 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer ${
-                      authMode === 'login' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'
-                    }`}
-                  >
-                    Email Login
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setAuthMode('register');
-                      setError(null);
-                    }}
-                    className={`min-h-[40px] rounded-md px-2 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer ${
-                      authMode === 'register' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'
-                    }`}
-                  >
-                    Register
-                  </button>
-                </div>
-
-                {error && (
-                  <div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">
-                    {error}
-                  </div>
-                )}
-                {infoMessage && (
-                  <div className="mt-4 rounded-lg border border-teal-200 bg-teal-50 p-3 text-sm text-teal-900">
-                    {infoMessage}
-                  </div>
-                )}
-
-                {authMode === 'google' ? (
+                {pendingVerificationUser ? (
                   <div className="mt-6 space-y-4">
+                    <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950">
+                      <h3 className="font-semibold">Verify your email to continue</h3>
+                      <p className="mt-1">
+                        TownshipBiz sent a verification link to {pendingVerificationUser.email || 'your email address'}.
+                        Verify your address before creating a profile or accessing your business workspace.
+                      </p>
+                    </div>
+                    {authError && (
+                      <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+                        {authError}
+                      </div>
+                    )}
+                    {error && (
+                      <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+                        {error}
+                      </div>
+                    )}
+                    {infoMessage && (
+                      <div className="rounded-lg border border-teal-200 bg-teal-50 p-3 text-sm text-teal-900">
+                        {infoMessage}
+                      </div>
+                    )}
                     <button
                       type="button"
-                      onClick={handleGoogleSignIn}
+                      onClick={handleRefreshVerification}
                       disabled={loading}
-                      className="flex min-h-[48px] w-full items-center justify-center gap-2 rounded-lg bg-teal-700 px-5 py-3 text-sm font-semibold text-white hover:bg-teal-800 transition-colors cursor-pointer disabled:opacity-60"
+                      className="min-h-[48px] w-full rounded-lg bg-teal-700 px-5 py-2.5 text-sm font-semibold text-white hover:bg-teal-800 cursor-pointer disabled:opacity-60"
                     >
-                      <span>{loading ? 'Signing in...' : 'Continue with Google'}</span>
-                      <ArrowRight className="h-4 w-4" />
+                      {loading ? 'Checking verification...' : "I've verified my email"}
                     </button>
-                    <p className="text-xs text-slate-500 leading-relaxed">
-                      Recommended for instant access. Your session uses verified token authentication and
-                      never shares private documents publicly.
-                    </p>
+                    <button
+                      type="button"
+                      onClick={handleResendVerification}
+                      disabled={loading}
+                      className="min-h-[44px] w-full rounded-lg border border-slate-300 px-5 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer disabled:opacity-60"
+                    >
+                      Resend verification email
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleSignOut}
+                      disabled={loading}
+                      className="w-full py-2 text-sm font-medium text-slate-600 hover:text-slate-900 cursor-pointer disabled:opacity-60"
+                    >
+                      Sign out
+                    </button>
                   </div>
                 ) : (
-                  <form onSubmit={handleEmailAuth} className="mt-5 space-y-3">
-                    {authMode === 'register' && (
-                      <div>
-                        <label className="block text-xs font-medium text-slate-700">Your full name</label>
-                        <input
-                          type="text"
-                          required
-                          value={displayName}
-                          onChange={(e) => setDisplayName(e.target.value)}
-                          placeholder="e.g. Thabo Mokoena"
-                          className="mt-1 min-h-[44px] w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-teal-700 focus:outline-none"
-                        />
+                  <>
+                    {authError && (
+                      <div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+                        {authError}
                       </div>
                     )}
-                    <div>
-                      <label className="block text-xs font-medium text-slate-700">Email address</label>
-                      <input
-                        type="email"
-                        required
-                        value={email}
-                        onChange={(e) => setEmail(e.target.value)}
-                        placeholder="owner@yourbusiness.co.za"
-                        className="mt-1 min-h-[44px] w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-teal-700 focus:outline-none"
-                      />
-                    </div>
-                    {authMode !== 'reset' && (
-                      <div>
-                        <label className="block text-xs font-medium text-slate-700">Password</label>
-                        <input
-                          type="password"
-                          required
-                          value={password}
-                          onChange={(e) => setPassword(e.target.value)}
-                          placeholder="Minimum 10 characters"
-                          className="mt-1 min-h-[44px] w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-teal-700 focus:outline-none"
-                        />
-                      </div>
-                    )}
-                    <button
-                      type="submit"
-                      disabled={loading}
-                      className="min-h-[48px] w-full rounded-lg bg-teal-700 px-5 py-2.5 text-sm font-semibold text-white hover:bg-teal-800 transition-colors cursor-pointer disabled:opacity-60"
-                    >
-                      {loading
-                        ? 'Processing...'
-                        : authMode === 'login'
-                        ? 'Sign in with Email'
-                        : authMode === 'register'
-                        ? 'Create Account'
-                        : 'Send Password Reset Email'}
-                    </button>
-                    <div className="flex items-center justify-between pt-1 text-xs">
+                    <div className="mt-5 grid grid-cols-3 gap-1 rounded-lg bg-slate-100 p-1">
                       <button
                         type="button"
-                        onClick={() => setAuthMode(authMode === 'reset' ? 'login' : 'reset')}
-                        className="font-medium text-teal-700 hover:underline cursor-pointer"
+                        onClick={() => {
+                          setAuthMode('google');
+                          setError(null);
+                        }}
+                        className={`min-h-[40px] rounded-md px-2 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer ${
+                          authMode === 'google'
+                            ? 'bg-white text-slate-900 shadow-sm'
+                            : 'text-slate-600 hover:text-slate-900'
+                        }`}
                       >
-                        {authMode === 'reset' ? 'Back to Email Login' : 'Forgot password?'}
+                        Google
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAuthMode('login');
+                          setError(null);
+                        }}
+                        className={`min-h-[40px] rounded-md px-2 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer ${
+                          authMode === 'login'
+                            ? 'bg-white text-slate-900 shadow-sm'
+                            : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                      >
+                        Email Login
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAuthMode('register');
+                          setError(null);
+                        }}
+                        className={`min-h-[40px] rounded-md px-2 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer ${
+                          authMode === 'register'
+                            ? 'bg-white text-slate-900 shadow-sm'
+                            : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                      >
+                        Register
                       </button>
                     </div>
-                  </form>
+
+                    {error && (
+                      <div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+                        {error}
+                      </div>
+                    )}
+                    {canUseGoogleRedirect && (
+                      <button
+                        type="button"
+                        onClick={handleGoogleRedirect}
+                        disabled={loading}
+                        className="mt-3 min-h-[44px] w-full rounded-lg border border-teal-700 px-5 py-2.5 text-sm font-semibold text-teal-800 hover:bg-teal-50 cursor-pointer disabled:opacity-60"
+                      >
+                        Continue with Google using a page redirect
+                      </button>
+                    )}
+                    {infoMessage && (
+                      <div className="mt-4 rounded-lg border border-teal-200 bg-teal-50 p-3 text-sm text-teal-900">
+                        {infoMessage}
+                      </div>
+                    )}
+
+                    {authMode === 'google' ? (
+                      <div className="mt-6 space-y-4">
+                        <button
+                          type="button"
+                          onClick={handleGoogleSignIn}
+                          disabled={loading}
+                          className="flex min-h-[48px] w-full items-center justify-center gap-2 rounded-lg bg-teal-700 px-5 py-3 text-sm font-semibold text-white hover:bg-teal-800 transition-colors cursor-pointer disabled:opacity-60"
+                        >
+                          <span>{loading ? 'Signing in...' : 'Continue with Google'}</span>
+                          <ArrowRight className="h-4 w-4" />
+                        </button>
+                        <p className="text-xs text-slate-500 leading-relaxed">
+                          Recommended for instant access. Your session uses verified token authentication and
+                          never shares private documents publicly.
+                        </p>
+                      </div>
+                    ) : (
+                      <form onSubmit={handleEmailAuth} className="mt-5 space-y-3">
+                        {authMode === 'register' && (
+                          <div>
+                            <label className="block text-xs font-medium text-slate-700">Your full name</label>
+                            <input
+                              type="text"
+                              required
+                              value={displayName}
+                              onChange={(e) => setDisplayName(e.target.value)}
+                              placeholder="e.g. Thabo Mokoena"
+                              className="mt-1 min-h-[44px] w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-teal-700 focus:outline-none"
+                            />
+                          </div>
+                        )}
+                        <div>
+                          <label className="block text-xs font-medium text-slate-700">Email address</label>
+                          <input
+                            type="email"
+                            required
+                            value={email}
+                            onChange={(e) => setEmail(e.target.value)}
+                            placeholder="owner@yourbusiness.co.za"
+                            className="mt-1 min-h-[44px] w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-teal-700 focus:outline-none"
+                          />
+                        </div>
+                        {authMode !== 'reset' && (
+                          <div>
+                            <label className="block text-xs font-medium text-slate-700">Password</label>
+                            <input
+                              type="password"
+                              required
+                              value={password}
+                              onChange={(e) => setPassword(e.target.value)}
+                              placeholder="Minimum 10 characters"
+                              className="mt-1 min-h-[44px] w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-teal-700 focus:outline-none"
+                            />
+                          </div>
+                        )}
+                        <button
+                          type="submit"
+                          disabled={loading}
+                          className="min-h-[48px] w-full rounded-lg bg-teal-700 px-5 py-2.5 text-sm font-semibold text-white hover:bg-teal-800 transition-colors cursor-pointer disabled:opacity-60"
+                        >
+                          {loading
+                            ? 'Processing...'
+                            : authMode === 'login'
+                            ? 'Sign in with Email'
+                            : authMode === 'register'
+                            ? 'Create Account'
+                            : 'Send Password Reset Email'}
+                        </button>
+                        <div className="flex items-center justify-between pt-1 text-xs">
+                          <button
+                            type="button"
+                            onClick={() => setAuthMode(authMode === 'reset' ? 'login' : 'reset')}
+                            className="font-medium text-teal-700 hover:underline cursor-pointer"
+                          >
+                            {authMode === 'reset' ? 'Back to Email Login' : 'Forgot password?'}
+                          </button>
+                        </div>
+                      </form>
+                    )}
+                  </>
                 )}
               </div>
 

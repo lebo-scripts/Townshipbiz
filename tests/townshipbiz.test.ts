@@ -1,9 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import type { BusinessProfile, FinancialTransaction, VaultDocument } from '../shared/types.ts';
+import { canRetryGoogleSignInWithRedirect, isEmailVerifiedUser } from '../src/lib/auth.ts';
 import { buildTransactionsCSV, computeFinancialAnalytics } from '../server/services/analyticsEngine.ts';
 import { assessBusinessCompliance } from '../server/services/complianceEngine.ts';
 import {
   findDuplicateReceiptCandidates,
+  createGeminiClient,
+  createReceiptExtractionConfig,
+  createReceiptExtractionError,
+  GEMINI_API_VERSION,
+  getGeminiClientOptions,
+  parseReceiptExtractionResponse,
   retrieveRelevantRecords,
   stripMarkdownAndParseJson,
 } from '../server/services/gemini.ts';
@@ -21,6 +28,20 @@ import {
 } from '../server/services/privateVault.ts';
 
 describe('Security & Authentication Utilities', () => {
+  it('allows profile setup only after Firebase reports a verified email', () => {
+    expect(isEmailVerifiedUser({ emailVerified: true })).toBe(true);
+    expect(isEmailVerifiedUser({ emailVerified: false })).toBe(false);
+    expect(isEmailVerifiedUser(null)).toBe(false);
+  });
+
+  it('offers Google redirect retry only for popup-specific failures', () => {
+    expect(canRetryGoogleSignInWithRedirect('auth/popup-closed-by-user')).toBe(true);
+    expect(canRetryGoogleSignInWithRedirect('auth/popup-blocked')).toBe(true);
+    expect(canRetryGoogleSignInWithRedirect('auth/web-storage-unsupported')).toBe(true);
+    expect(canRetryGoogleSignInWithRedirect('permission-denied')).toBe(false);
+    expect(canRetryGoogleSignInWithRedirect(undefined)).toBe(false);
+  });
+
   it('hashes and verifies strong passwords with unique salts', () => {
     const h1 = hashPassword('SowetoBiz#2026');
     const h2 = hashPassword('SowetoBiz#2026');
@@ -95,6 +116,32 @@ describe('Private Document Vault Security', () => {
     });
     expect(stripMarkdownAndParseJson('Here is the JSON:\n{"total":50}')).toEqual({ total: 50 });
     expect(stripMarkdownAndParseJson('not valid json at all')).toBeNull();
+  });
+
+  it('configures Gemini structured output for v1beta and rejects incomplete receipt JSON', () => {
+    expect(GEMINI_API_VERSION).toBe('v1beta');
+    expect(getGeminiClientOptions('test-api-key').httpOptions?.apiVersion).toBe('v1beta');
+    expect(createGeminiClient('test-api-key')).toBeDefined();
+    const config = createReceiptExtractionConfig();
+    expect(config.responseMimeType).toBe('application/json');
+    expect(config.responseSchema).toMatchObject({ required: ['merchant', 'date', 'total'] });
+    expect(config).not.toHaveProperty('thinkingConfig');
+    expect(parseReceiptExtractionResponse('{"merchant":"Shoprite","date":null,"total":124.5}')).toEqual({
+      merchant: 'Shoprite',
+      date: null,
+      total: 124.5,
+    });
+    expect(parseReceiptExtractionResponse('{"merchant":"Shoprite"}')).toBeNull();
+    expect(parseReceiptExtractionResponse('not JSON')).toBeNull();
+  });
+
+  it('preserves useful Gemini errors when reporting receipt extraction failures', () => {
+    expect(createReceiptExtractionError(new Error('Thinking level is not supported for this model.')).message).toBe(
+      'Receipt extraction failed: Thinking level is not supported for this model.'
+    );
+    expect(createReceiptExtractionError('unknown failure').message).toBe(
+      'Receipt extraction failed: Unexpected OCR error.'
+    );
   });
 
   it('produces deterministic SHA-256 hashes for duplicate detection', () => {
@@ -364,6 +411,7 @@ describe('Express API Security & Integration Routes', () => {
     try {
       const healthRes = await fetch(`${baseUrl}/api/health`);
       expect(healthRes.status).toBe(200);
+      expect(healthRes.headers.get('cross-origin-opener-policy')).toBe('same-origin-allow-popups');
       const healthJson = (await healthRes.json()) as { status: string };
       expect(healthJson.status).toBe('ok');
 

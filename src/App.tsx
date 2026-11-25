@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { onAuthStateChanged, signOut, type User } from 'firebase/auth';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { getIdToken, onAuthStateChanged, reload, signOut, type User } from 'firebase/auth';
 import {
   Bell,
   Bot,
@@ -52,7 +52,8 @@ import {
   subscribeBusinessSubcollection,
   subscribeMarketplace,
 } from './lib/db';
-import { auth, testFirestoreConnection } from './lib/firebase';
+import { isEmailVerifiedUser } from './lib/auth';
+import { auth } from './lib/firebase';
 
 const NAV_ITEMS = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -86,7 +87,9 @@ const EMPTY_SUMMARY: FinancialSummary = {
 export default function App() {
   const [authUser, setAuthUser] = useState<User | null>(null);
   const [authReady, setAuthReady] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
+  const profileLoads = useRef(new Map<string, Promise<UserProfile>>());
   const [businesses, setBusinesses] = useState<BusinessProfile[]>([]);
   const [activeBusinessId, setActiveBusinessId] = useState<string>('');
   const [creatingBusiness, setCreatingBusiness] = useState(false);
@@ -112,20 +115,48 @@ export default function App() {
   const [summary, setSummary] = useState<FinancialSummary>(EMPTY_SUMMARY);
   const [complianceItems, setComplianceItems] = useState<ComplianceAssessmentItem[]>([]);
 
+  const loadVerifiedUserProfile = useCallback(async (user: User) => {
+    if (!isEmailVerifiedUser(user)) {
+      setUserProfile(null);
+      return;
+    }
+
+    setAuthError(null);
+    let profileLoad = profileLoads.current.get(user.uid);
+    if (!profileLoad) {
+      profileLoad = ensureUserProfile({
+        uid: user.uid,
+        email: user.email,
+        displayName: user.displayName,
+      });
+      profileLoads.current.set(user.uid, profileLoad);
+    }
+
+    try {
+      const profile = await profileLoad;
+      if (auth.currentUser?.uid === user.uid && isEmailVerifiedUser(user)) {
+        setUserProfile(profile);
+      }
+    } catch (error) {
+      profileLoads.current.delete(user.uid);
+      if (auth.currentUser?.uid === user.uid) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error('Failed to load the verified Firebase user profile:', error);
+        setAuthError(
+          message.includes('Missing or insufficient permissions')
+            ? 'Your Firebase sign-in succeeded, but Firestore denied access to your profile. TownshipBiz requires a verified email; try signing out and back in, and contact support if this continues.'
+            : 'You are signed in, but TownshipBiz could not load your profile. Please try again.'
+        );
+      }
+    }
+  }, []);
+
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (user) => {
       setAuthUser(user);
-      setAuthReady(true);
-      if (user) {
-        await testFirestoreConnection();
-        const profile = await ensureUserProfile({
-          uid: user.uid,
-          email: user.email,
-          displayName: user.displayName,
-        });
-        setUserProfile(profile);
-      } else {
-        setUserProfile(null);
+      setUserProfile(null);
+      setAuthError(null);
+      if (!user) {
         setBusinesses([]);
         setActiveBusinessId('');
         setTransactions([]);
@@ -139,10 +170,31 @@ export default function App() {
         setAuditLogs([]);
         setSummary(EMPTY_SUMMARY);
         setComplianceItems([]);
+        setAuthReady(true);
+        return;
+      }
+
+      try {
+        if (!isEmailVerifiedUser(user)) {
+          await reload(user);
+          await getIdToken(user, true);
+        }
+        if (auth.currentUser?.uid === user.uid && isEmailVerifiedUser(user)) {
+          await loadVerifiedUserProfile(user);
+        }
+      } catch (error) {
+        if (auth.currentUser?.uid === user.uid) {
+          console.error('Could not refresh the Firebase sign-in state:', error);
+          setAuthError('Could not refresh your Firebase sign-in state. Check your connection and try again.');
+        }
+      } finally {
+        if (auth.currentUser?.uid === user.uid) {
+          setAuthReady(true);
+        }
       }
     });
     return unsub;
-  }, []);
+  }, [loadVerifiedUserProfile]);
 
   useEffect(() => {
     const unsubMkt = subscribeMarketplace(setMarketplaceListings);
@@ -268,7 +320,16 @@ export default function App() {
   }
 
   if (!authUser || !userProfile) {
-    return <AuthScreen />;
+    return (
+      <AuthScreen
+        authError={authError}
+        onEmailVerified={async (user) => {
+          setAuthReady(false);
+          await loadVerifiedUserProfile(user);
+          setAuthReady(true);
+        }}
+      />
+    );
   }
 
   if (businesses.length === 0 || creatingBusiness) {

@@ -8,7 +8,7 @@ TownshipBiz is a mobile-first, full-stack business management platform tailored 
 - **Backend API**: Node.js + Express (`server.ts`, `server/services/*`, `server/middleware/*`) with Helmet security headers, rate limiting, and Firebase ID token verification.
 - **Database & Auth**: Firebase Authentication (Google Sign-In + Email/Password support) and Cloud Firestore with hardened per-business isolation security rules (`firestore.rules`, `firebase-blueprint.json`).
 - **Private File Storage**: Isolated local/server private vault (`.private_storage/`) with magic-byte MIME verification, executable rejection, SHA-256 hashing, and authenticated streaming downloads (zero public URLs).
-- **AI Services (`@google/genai`)**: Server-side `gemini-4-hydrogen` integration for receipt OCR & confidence scoring, document vault interpretation, and RAG-grounded Business Adviser responses.
+- **AI Services (`@google/genai`)**: Server-side Gemini integration (default model `gemini-2.5-flash`) for receipt OCR & confidence scoring, document vault interpretation, and RAG-grounded Business Adviser responses. Structured JSON requests use the Gemini Developer API `v1beta` endpoint.
 - **Deterministic Engines**:
   - **South African Regulatory Compliance Engine** (`server/services/complianceEngine.ts`): Rules for CIPC, SARS Income Tax / Turnover Tax, VAT (R1M threshold), PAYE, UIF, COIDA, BCEA, OHS, Municipal Trading Permits, SPLUMA Zoning, R638 Food Premises COA, and POPIA.
   - **Financial Analytics & Anomaly Engine** (`server/services/analyticsEngine.ts`): Cash flow, category breakdowns, supplier history, MoM comparisons, duplicate expense detection, and CSV export with formula-injection protection.
@@ -18,10 +18,17 @@ TownshipBiz is a mobile-first, full-stack business management platform tailored 
 Copy `.env.example` to `.env` for local development. In AI Studio, `GEMINI_API_KEY` and `APP_URL` are injected via Secrets/runtime.
 
 - `GEMINI_API_KEY`: Server-side Gemini API key (never exposed to browser code).
+- `GEMINI_MODEL`: Optional server-side Gemini model override (default `gemini-2.5-flash`).
 - `PORT`: Listening port (`3000`).
 - `VAULT_STORAGE_DIR`: Private directory for uploaded receipts and documents (default `.private_storage`).
 - `MAX_UPLOAD_BYTES`: Maximum file upload size in bytes (default `10485760`).
 - `AUTH_TOKEN_SECRET`: Secret key for signing auxiliary reset tokens.
+
+## Firebase Authentication Setup
+
+Enable Google and Email/Password providers in Firebase Authentication. Add `localhost` and each deployed app hostname under **Authentication → Settings → Authorized domains**. For Google OAuth, keep the Firebase auth handler URI (`https://<authDomain>/__/auth/handler`) registered with the OAuth client. Email/Password accounts must verify their email before TownshipBiz creates a Firestore profile.
+
+If a browser blocks cross-site Firebase Auth storage, use the redirect option shown after popup sign-in fails. For reliable redirect authentication under strict browser tracking protection, configure a same-site Firebase `authDomain` (or the documented auth-domain proxy) for the deployed app.
 
 ## Backend API Endpoints
 

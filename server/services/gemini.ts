@@ -1,4 +1,4 @@
-import { GoogleGenAI, ThinkingLevel, Type } from '@google/genai';
+import { GoogleGenAI, Type } from '@google/genai';
 import type {
   AdviserCitation,
   AdviserResponse,
@@ -14,19 +14,88 @@ import type {
 } from '../../shared/types.ts';
 import { DEFAULT_EXPENSE_CATEGORIES, DOCUMENT_CATEGORIES } from '../../shared/types.ts';
 
+export function getGeminiModel(): string {
+  return process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+}
+
+export const GEMINI_API_VERSION = 'v1beta';
+
+export function getGeminiClientOptions(apiKey: string): NonNullable<ConstructorParameters<typeof GoogleGenAI>[0]> {
+  return {
+    apiKey,
+    httpOptions: {
+      apiVersion: GEMINI_API_VERSION,
+      headers: {
+        'User-Agent': 'aistudio-build',
+      },
+    },
+  };
+}
+
+export function createGeminiClient(apiKey: string): GoogleGenAI {
+  return new GoogleGenAI(getGeminiClientOptions(apiKey));
+}
+
+type GeminiGenerateConfig = NonNullable<
+  Parameters<GoogleGenAI['models']['generateContent']>[0]['config']
+>;
+
+export function createReceiptExtractionConfig(): GeminiGenerateConfig {
+  return {
+    responseMimeType: 'application/json',
+    responseSchema: {
+      type: Type.OBJECT,
+      required: ['merchant', 'date', 'total'],
+      properties: {
+        merchant: { type: Type.STRING, nullable: true },
+        date: { type: Type.STRING, nullable: true },
+        receiptNumber: { type: Type.STRING, nullable: true },
+        lineItems: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              description: { type: Type.STRING },
+              quantity: { type: Type.NUMBER, nullable: true },
+              unitPrice: { type: Type.NUMBER, nullable: true },
+              lineTotal: { type: Type.NUMBER, nullable: true },
+            },
+          },
+        },
+        subtotal: { type: Type.NUMBER, nullable: true },
+        discounts: { type: Type.NUMBER, nullable: true },
+        vatAmount: { type: Type.NUMBER, nullable: true },
+        total: { type: Type.NUMBER, nullable: true },
+        paymentMethod: { type: Type.STRING, nullable: true },
+        suggestedCategory: { type: Type.STRING },
+        rawText: { type: Type.STRING },
+        confidence: {
+          type: Type.OBJECT,
+          properties: {
+            merchant: { type: Type.STRING },
+            date: { type: Type.STRING },
+            total: { type: Type.STRING },
+            vatAmount: { type: Type.STRING },
+            overall: { type: Type.STRING },
+          },
+        },
+        warnings: { type: Type.ARRAY, items: { type: Type.STRING } },
+      },
+    },
+  };
+}
+
+export function createReceiptExtractionError(error: unknown): Error {
+  const message = error instanceof Error ? error.message : 'Unexpected OCR error.';
+  return new Error(`Receipt extraction failed: ${message}`);
+}
+
 function getGeminiClient(): GoogleGenAI | null {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey || apiKey === 'MY_GEMINI_API_KEY') {
     return null;
   }
-  return new GoogleGenAI({
-    apiKey,
-    httpOptions: {
-      headers: {
-        'User-Agent': 'aistudio-build',
-      },
-    },
-  });
+  return createGeminiClient(apiKey);
 }
 
 export function stripMarkdownAndParseJson<T>(rawText: string | undefined): T | null {
@@ -55,6 +124,23 @@ export function stripMarkdownAndParseJson<T>(rawText: string | undefined): T | n
     }
     return null;
   }
+}
+
+export function parseReceiptExtractionResponse(
+  rawText: string | undefined
+): Partial<ReceiptExtractionResult> | null {
+  const parsed = stripMarkdownAndParseJson<Partial<ReceiptExtractionResult>>(rawText);
+  if (
+    !parsed ||
+    typeof parsed !== 'object' ||
+    Array.isArray(parsed) ||
+    !('merchant' in parsed) ||
+    !('date' in parsed) ||
+    !('total' in parsed)
+  ) {
+    return null;
+  }
+  return parsed;
 }
 
 function parseOptionalNumber(value: unknown): number | null {
@@ -183,7 +269,7 @@ Rules:
 
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-4-hydrogen',
+      model: getGeminiModel(),
       contents: {
         parts: [
           {
@@ -195,51 +281,10 @@ Rules:
           { text: prompt },
         ],
       },
-      config: {
-        thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
-        responseMimeType: 'application/json',
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            merchant: { type: Type.STRING, nullable: true },
-            date: { type: Type.STRING, nullable: true },
-            receiptNumber: { type: Type.STRING, nullable: true },
-            lineItems: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  description: { type: Type.STRING },
-                  quantity: { type: Type.NUMBER, nullable: true },
-                  unitPrice: { type: Type.NUMBER, nullable: true },
-                  lineTotal: { type: Type.NUMBER, nullable: true },
-                },
-              },
-            },
-            subtotal: { type: Type.NUMBER, nullable: true },
-            discounts: { type: Type.NUMBER, nullable: true },
-            vatAmount: { type: Type.NUMBER, nullable: true },
-            total: { type: Type.NUMBER, nullable: true },
-            paymentMethod: { type: Type.STRING, nullable: true },
-            suggestedCategory: { type: Type.STRING },
-            rawText: { type: Type.STRING },
-            confidence: {
-              type: Type.OBJECT,
-              properties: {
-                merchant: { type: Type.STRING },
-                date: { type: Type.STRING },
-                total: { type: Type.STRING },
-                vatAmount: { type: Type.STRING },
-                overall: { type: Type.STRING },
-              },
-            },
-            warnings: { type: Type.ARRAY, items: { type: Type.STRING } },
-          },
-        },
-      },
+      config: createReceiptExtractionConfig(),
     });
 
-    const parsed = stripMarkdownAndParseJson<Partial<ReceiptExtractionResult>>(response.text);
+    const parsed = parseReceiptExtractionResponse(response.text);
     if (!parsed) {
       return buildManualReceiptFallback(
         existingTransactions,
@@ -298,8 +343,7 @@ Rules:
     return normalized;
   } catch (err) {
     console.error('Receipt OCR failed:', err);
-    const msg = err instanceof Error ? err.message : 'Unexpected OCR error.';
-    throw new Error(`Receipt extraction failed: ${msg}`);
+    throw createReceiptExtractionError(err);
   }
 }
 
@@ -362,10 +406,9 @@ export async function interpretDocumentWithAI(
           ];
 
     const response = await ai.models.generateContent({
-      model: 'gemini-4-hydrogen',
+      model: getGeminiModel(),
       contents: { parts },
       config: {
-        thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
         responseMimeType: 'application/json',
         responseSchema: {
           type: Type.OBJECT,
@@ -670,7 +713,7 @@ export async function askBusinessAdviserAI(
 
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-4-hydrogen',
+      model: getGeminiModel(),
       contents: `User question: ${question}\n\nRetrieved authorised business records:\n${JSON.stringify(contextPayload)}`,
       config: {
         systemInstruction: `You are TownshipBiz Business Adviser for a South African small business owner.
@@ -681,7 +724,6 @@ Rules:
 4. Never fabricate ZAR figures, SARS thresholds, municipal bylaws, or legal/tax advice.
 5. Keep language plain, warm, practical, and tailored to South Africa (use ZAR / R formatting).
 6. If the user asks to modify or add a financial or compliance record, explain what would change and state that explicit confirmation is required first.`,
-        thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
       },
     });
 

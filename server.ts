@@ -74,6 +74,7 @@ export function createApp() {
     helmet({
       contentSecurityPolicy: false, // Vite dev & Firebase popup auth compatibility
       crossOriginEmbedderPolicy: false,
+      crossOriginOpenerPolicy: { policy: 'same-origin-allow-popups' },
     })
   );
 

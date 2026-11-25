@@ -25,6 +25,7 @@ import type {
   UserProfile,
   VaultDocument,
 } from '../../shared/types';
+import { isEmailVerifiedUser } from './auth';
 import { auth, db } from './firebase';
 
 export enum OperationType {
@@ -90,6 +91,14 @@ export async function ensureUserProfile(user: {
   email: string | null;
   displayName: string | null;
 }): Promise<UserProfile> {
+  if (
+    !auth.currentUser ||
+    auth.currentUser.uid !== user.uid ||
+    !isEmailVerifiedUser(auth.currentUser)
+  ) {
+    throw new Error('A signed-in user with a verified email is required to load a profile.');
+  }
+
   const path = `users/${user.uid}`;
   const ref = doc(db, 'users', user.uid);
   try {
